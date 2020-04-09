@@ -1,0 +1,159 @@
+---
+title: "Mapping Btnl[1,4,6] Genes to Small Intestinal Epithelium scRNA-Seq Data: Haber <i>et. al.</i>"
+author: "philip.east@crick.ac.uk"
+date: 'Compiled: `r format(Sys.time(), "%d %B, %Y @ %H:%M:%S")`'
+output:
+  html_document:
+    df_print: tibble
+    toc: true
+    toc_depth: 5
+    toc_float: true
+    code_folding: hide
+---
+
+```{css setup_css, echo=FALSE}
+body .main-container {
+  max-width: 100%;
+}
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE,message=FALSE,warning=FALSE)
+options(scipen=15)
+```
+
+```{r init_r}
+library( Seurat )
+library( tidyverse )
+set.seed( 1000 )
+```
+
+```{r init_proj}
+my_grey <- "#707173"
+my_red <- "#e3001a"
+```
+
+# Introduction
+
+Presented here is a re-analysis of scRNA-Seq data from [Haber
+et. al.](https://www.nature.com/articles/nature24489) 'A single-cell
+survey of the small intestinal epithelium'. Here we show the expression patterns of
+specific Btnl genes in different intestinal cell populations reported
+in Haber *et. al.*
+
+# Btln Genes
+
+We are interested in Btnl1/4/6.
+
+```{r btln}
+genes <- c( "Btnl1", "Btnl4", "Btnl6" )
+```
+
+# scRNA-Seq data
+
+The raw data and processed cell sets can be found at [GSE92332](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE92332).
+
+
+## Read in data
+
+We read in the raw counts contained within
+[GSE92332_SalmHelm_UMIcounts.txt](https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE92332&format=file&file=GSE92332%5FSalmHelm%5FUMIcounts%2Etxt%2Egz). Cell barcode, cell type and infection status labels were obtained from column headers.
+
+```{r data_in}
+sc_exprs_mat_file <- "GSE92332_SalmHelm_UMIcounts.txt"
+dat <- read.delim( file = sc_exprs_mat_file )
+
+design_l <- strsplit( colnames( dat ), "_" )
+names( design_l ) <- unlist( lapply( design_l, function( x ) paste( x[ 2 ], x[ 1 ], sep = "_" ) ) )
+design_df <- do.call( 'rbind', design_l ) %>%
+    as.data.frame( )
+colnames( design_df ) <- c( "cell_group", "barcode", "condition", "cell_type" )
+
+colnames( dat ) <- rownames( design_df )
+srat_obj <- CreateSeuratObject( counts = dat,
+                               meta.data = design_df,
+                               project = "haber_etal",
+                               min.cells = 0,
+                               min.features = 0 )
+
+srat_obj@meta.data <- srat_obj@meta.data %>%
+    rownames_to_column( var = "cell_id" ) %>%
+    mutate( cell_id_tmp = cell_id ) %>%
+    column_to_rownames( "cell_id_tmp" )
+srat_obj
+```
+
+# QC
+
+Here we check the number of genes and UMIs identified per cell. These
+were found to be within expected ranges.
+
+```{r qc_filter}
+VlnPlot( object = srat_obj,
+        features = c("nFeature_RNA", "nCount_RNA" ),
+        ncol = 2,
+        slot = "counts" )
+
+plot1 <- FeatureScatter( object = srat_obj,
+                         feature1 = "nCount_RNA",
+                         feature2 = "nFeature_RNA" )
+plot1
+```
+
+# Preprocess raw counts
+
+Here we process the raw counts in-line with the standard Seurat
+workflow. We first normalise the raw counts by scaling them to 10,000
+counts and applying a log transformation. We identify the 2000 most variable genes
+using Seurat's vst method. We then scale the data prior to running
+PCA. The cells are then clustered and non-linear dimension reduction
+is applied using UMAP and the first 50 PCs.
+
+```{r preprocess}
+dims_to_use <- 50
+srat_obj <- NormalizeData( srat_obj, normalization.method = "LogNormalize", scale.factor = 10000 )
+srat_obj <- FindVariableFeatures( object = srat_obj,
+                                     selection.method = 'vst',
+                                     nfeatures = 2000 )
+srat_obj <- ScaleData( object = srat_obj, features = rownames(x = srat_obj ) )
+srat_obj <- RunPCA( object = srat_obj, features = VariableFeatures( object = srat_obj ), verbose = FALSE )
+ElbowPlot( object = srat_obj, ndims = 50 )
+srat_obj <- FindNeighbors( object = srat_obj, dims = 1:dims_to_use, verbose = FALSE )
+srat_obj <- FindClusters( object = srat_obj, resolution = 0.5, verbose = FALSE )
+srat_obj <- RunUMAP( object = srat_obj, dims = 1:dims_to_use )
+```
+
+# Diffusion Map
+
+A diffusion map with published cell types in the control group.
+
+## Cell type diffusion map
+
+```{r cell_type_dm}
+dp1 <- DimPlot( object = srat_obj[, srat_obj$condition %in% "Control" ],
+                reduction = 'umap', label = TRUE, group.by = "cell_type" ) +
+    labs( title = "Cell Type: Control group" )
+print( dp1 )
+```
+
+# DotPlot
+
+The expression of the Btnl genes are shown per cell type across the
+control group. The colour represents the mean expression across the
+cell types (z-score scaled). The size of the dot shows the percentage of expressing
+cells within each cell type.
+
+```{r dotplot}
+dp <- DotPlot( srat_obj[, srat_obj$condition %in% "Control" ],
+              features = rev( genes ), cols = c( "lightgrey", my_red ),
+              dot.scale = 8, group.by = "cell_type" ) +
+    labs( y = "Cell types", x = "Btnl[x] genes", title = "Control group" ) +
+    theme( axis.text.x = element_text( angle = 90, hjust = 1 ) )
+print( dp )
+```
+
+# R Session Information
+
+```{r session}
+sessionInfo()
+```

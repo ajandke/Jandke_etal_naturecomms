@@ -1,0 +1,160 @@
+---
+title: "Mapping Btnl[1,4,6] Genes to Intestinal Villus Axis Expression Data: Moor <i>et. al.</i>"
+author: "philip.east@crick.ac.uk"
+date: 'Compiled: `r format(Sys.time(), "%d %B, %Y @ %H:%M:%S")`'
+output:
+  html_document:
+    df_print: tibble
+    toc: true
+    toc_depth: 5
+    toc_float: true
+    code_folding: hide
+---
+
+```{css setup_css, echo=FALSE}
+body .main-container {
+  max-width: 100%;
+}
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE,message=FALSE,warning=FALSE)
+options(scipen=15)
+```
+
+```{r init_r}
+library( Seurat )
+library( ggplot2 )
+library( tidyverse )
+set.seed( 1000 )
+```
+
+```{r init_proj}
+my_grey <- "#707173"
+my_red <- "#e3001a"
+my_blue <- "#4066aa"
+
+plot_formatter <- function() {
+    theme_bw( ) +
+        theme( panel.grid.major = element_blank( ),
+               panel.grid.minor = element_blank( ),
+               panel.border = element_blank( ),
+               panel.background = element_blank( ),
+               text = element_text( size = 10 ) )
+}
+```
+# Introduction
+
+Presented here is a re-analysis of scRNA-Seq data from [Moor
+et. al.](https://www.sciencedirect.com/science/article/pii/S0092867418311644?via%3Dihub)
+'Spatial Reconstruction of Single Enterocytes Uncovers Broad Zonation
+along the Intestinal Villus Axis'. We show the expression patterns of
+specific Btnl genes (Btnl1,4 & 6) in the different villus segments
+reported in Moor *et. al.*
+
+## scRNA-Seq data
+
+The raw data can be found at [GSE109413](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE109413). There are two replicate cell sets. A processed form of the data, including Seurat objects, cell t-SNE coordinates and cell villus region definitions can be found at [https://zenodo.org/record/1400090](https://zenodo.org/record/1400090).
+
+# Btln Genes
+
+We are interested in Btnl1/4/6.
+
+```{r btln}
+genes <- c( "Btnl1", "Btnl4", "Btnl6" )
+```
+
+## Read in data
+
+The processed data contains a combined seurat object in file csc.combined_seurat.Rda. This is the object we are using for the Btln[x] expression values. There is also a file named table_C_scRNAseq_tsne_coordinates_zones.tsv which contains published t-SNE coordinates and villus region definitions.
+
+```{r data_in}
+load( file = "csc.combined_seurat.Rda" )
+srat_obj <- UpdateSeuratObject( csc.combined )
+srat_obj
+
+tsne_df <- read.delim( file = "table_C_scRNAseq_tsne_coordinates_zones.tsv" )
+
+srat_obj@meta.data <- srat_obj@meta.data %>%
+    rownames_to_column( var = "cell_id" ) %>%
+    mutate( cell_id_tmp = cell_id ) %>%
+    left_join( tsne_df, by = "cell_id" ) %>%
+    column_to_rownames( var = "cell_id_tmp" )
+srat_obj <- srat_obj[ ,!is.na( srat_obj$zone ) ]
+```
+
+## t-SNE
+
+We use the t-SNE coordinates published above to construct a t-SNE projection. 
+
+## Villus regions
+
+Here we see the t-SNE plot with villus regions highlighted. This
+recapitulates figure 2D in Moor *et. al.*
+
+```{r tsne}
+gg_tsne <- srat_obj@meta.data %>%
+    ggplot( aes ( x = tSNE_coordinate_1, y = tSNE_coordinate_2, color = zone ) ) +
+    geom_point()
+gg_tsne
+```
+
+## DotPlot
+
+The expression of Btnl genes are also shown per villus region in the
+dotplot below. The colour represents the mean expression across the
+cells within the villus region. The size of the dot shows the
+percentage of expressing cells within the region. The mean expression
+values per cell group are z-score scaled.
+
+```{r dotplot}
+dp <- DotPlot( srat_obj, features = rev( genes ),
+                  cols = c( "lightgrey", my_red ),
+                  dot.scale = 8,
+                  group.by = "zone" ) +
+    labs( y = "villus regions", x = "Btnl[x] genes" ) +
+    theme( axis.text.x = element_text( angle = 90, hjust = 1 ) )
+print( dp )
+```
+
+## Profile plots
+
+Below we see mean z-score Btnl gene expression profiles across the
+villus regions. The blue ribbon indicates the standard error in expression across the cells from each region. 
+
+```{r profile,fig.width=5}
+btln_exprs_norm <- GetAssayData( srat_obj, slot = "scale.data" )[ genes, ] %>%
+    as.data.frame( ) %>%
+    rownames_to_column( var = "gsymbol" ) %>%
+    gather( cell_id, exprs, -gsymbol ) %>%
+    spread( gsymbol, exprs )
+
+profile_plotdat <- srat_obj@meta.data %>%
+    dplyr::select( cell_id, zone ) %>%
+    left_join( btln_exprs_norm, by = "cell_id" ) %>%
+    gather( gene, exprs, -cell_id, -zone ) %>%
+    group_by( gene, zone ) %>%
+    dplyr::summarize( zone_mean = mean( exprs ),
+                     zone_se = sd( exprs ) / sqrt( length( exprs ) ) )
+
+gg_profile <- profile_plotdat %>%
+    filter( gene %in% genes ) %>%
+    ggplot( aes( x = zone, y = zone_mean, ymax = zone_mean + zone_se, ymin = zone_mean - zone_se, group = gene ) ) +
+    geom_line( ) +
+    geom_point( ) +
+    geom_ribbon( alpha = 0.15, color = my_blue, fill = my_blue ) +
+    facet_wrap( ~gene, ncol = 1 ) +
+    labs( y = "Villus region mean exprs", x = "Villus region" ) +
+    theme_bw( ) +
+    theme( panel.grid.major = element_blank( ),
+          panel.grid.minor = element_blank( ),
+          panel.background = element_blank( ),
+          text = element_text( size = 14 ) ) 
+print( gg_profile )
+```
+                      
+# R Session Information
+
+```{r session}
+sessionInfo()
+```
